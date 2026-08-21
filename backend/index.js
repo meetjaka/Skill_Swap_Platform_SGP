@@ -242,17 +242,6 @@ const emitCallPresence = async (classId, ioInstance) => {
 
 // Store io instance in app so controllers can access it
 app.set("io", io);
-connectDatabase()
-  .then((connection) => {
-    logger.info("MongoDB connected", {
-      host: connection.host,
-      database: connection.name,
-    });
-    startClassReminderScheduler(io);
-  })
-  .catch((error) => {
-    logger.error("MongoDB connection failed", { error: error.message });
-  });
 
 // Socket.io Connection Handler
 io.on("connection", (socket) => {
@@ -779,9 +768,27 @@ app.use((err, req, res, next) => {
   });
 });
 
-server.listen(conf.PORT, () => {
-  logger.info(`Server is running on port ${conf.PORT}`);
-});
+const startServer = async () => {
+  try {
+    const connection = await connectDatabase();
+    logger.info("MongoDB connected", {
+      host: connection.host,
+      database: connection.name,
+    });
+    startClassReminderScheduler(io);
+
+    server.listen(conf.PORT, () => {
+      logger.info(`Server is running on port ${conf.PORT}`);
+    });
+  } catch (error) {
+    logger.error("MongoDB connection failed; server not started", {
+      error: error.message,
+    });
+    process.exitCode = 1;
+  }
+};
+
+startServer();
 
 server.on("error", (err) => {
   if (err.code === "EADDRINUSE") {

@@ -68,6 +68,14 @@ const getUniqueWhere = (where = {}) => {
   return translateWhere(where);
 };
 
+const normalizeOrderBy = (orderBy = {}) => {
+  if (!Array.isArray(orderBy)) return orderBy;
+
+  return Object.fromEntries(
+    orderBy.flatMap((entry) => Object.entries(entry || {})),
+  );
+};
+
 const Counter =
   mongoose.models.SkillSwapCounter ||
   mongoose.model(
@@ -150,13 +158,15 @@ const delegate = (name) => {
       run(Model.findOne(getUniqueWhere(args.where)), args).exec(),
     findFirst: async (args = {}) =>
       run(
-        Model.findOne(translateWhere(args.where)).sort(args.orderBy || {}),
+        Model.findOne(translateWhere(args.where)).sort(
+          normalizeOrderBy(args.orderBy),
+        ),
         args,
       ).exec(),
     findMany: async (args = {}) =>
       run(
         Model.find(translateWhere(args.where))
-          .sort(args.orderBy || {})
+          .sort(normalizeOrderBy(args.orderBy))
           .skip(args.skip || 0)
           .limit(args.take || 0),
         args,
