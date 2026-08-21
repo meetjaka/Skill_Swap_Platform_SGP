@@ -36,10 +36,20 @@ const whiteboardSceneByClassId = new Map();
 const WHITEBOARD_CACHE_DIR = path.resolve("uploads", "whiteboard-scenes");
 const WHITEBOARD_CACHE_MAX_ENTRIES = 300;
 const WHITEBOARD_CACHE_TTL_MS = 1000 * 60 * 60 * 24; // 24 hours
-const frontendOrigin = conf.FRONTEND_URL || "http://localhost:5173";
+const frontendOrigins = (conf.FRONTEND_URL || "http://localhost:5173")
+  .split(",")
+  .map((origin) => origin.trim().replace(/\/$/, ""))
+  .filter(Boolean);
+const frontendOrigin = frontendOrigins[0];
+const corsOrigin = (origin, callback) => {
+  if (!origin || frontendOrigins.includes(origin.replace(/\/$/, ""))) {
+    return callback(null, true);
+  }
+  return callback(new Error("CORS origin not allowed"));
+};
 const io = new Server(server, {
   cors: {
-    origin: frontendOrigin,
+    origin: corsOrigin,
     methods: ["GET", "POST"],
     credentials: true,
   },
@@ -722,7 +732,7 @@ app.use((req, res, next) => {
 // Middleware
 app.use(
   cors({
-    origin: frontendOrigin,
+    origin: corsOrigin,
     credentials: true,
   }),
 );
