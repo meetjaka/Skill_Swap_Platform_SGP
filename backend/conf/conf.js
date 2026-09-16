@@ -1,5 +1,12 @@
 import dotenv from "dotenv";
-dotenv.config({ override: true });
+import path from "path";
+import { fileURLToPath } from "url";
+
+const configDirectory = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({
+  path: path.resolve(configDirectory, "../.env"),
+  override: true,
+});
 
 const adminUserIds = (process.env.ADMIN_USER_IDS || "")
   .split(",")

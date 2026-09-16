@@ -17,6 +17,11 @@ const sanitizePlainText = (value) =>
     allowedAttributes: {},
   }).trim();
 
+const normalizeSkillReference = (value) => {
+  const stringValue = String(value);
+  return /^\d+$/.test(stringValue) ? Number(stringValue) : stringValue;
+};
+
 const ensureClassOwnership = async (userId, classId) => {
   await assertUserInClass(userId, classId);
 };
@@ -38,6 +43,10 @@ export const createSwapRequestService = async (
   { io } = {},
 ) => {
   const { toUserId, teachSkillId, learnSkillId, message } = data;
+  const normalizedTeachSkillId = teachSkillId
+    ? normalizeSkillReference(teachSkillId)
+    : null;
+  const normalizedLearnSkillId = normalizeSkillReference(learnSkillId);
 
   if (fromUserId === toUserId) {
     throw new ValidationError(
@@ -54,9 +63,9 @@ export const createSwapRequestService = async (
   await assertUsersNotBlocked(fromUserId, toUserId);
 
   // Validate own skill (optional now)
-  if (teachSkillId) {
+  if (normalizedTeachSkillId) {
     const teachSkill = await prisma.userSkill.findFirst({
-      where: { id: teachSkillId, userId: fromUserId, type: "TEACH" },
+      where: { id: normalizedTeachSkillId, userId: fromUserId, type: "TEACH" },
     });
 
     if (!teachSkill) throw new ValidationError("Invalid teaching skill");
@@ -64,7 +73,7 @@ export const createSwapRequestService = async (
 
   // Validate target skill
   const learnSkill = await prisma.userSkill.findFirst({
-    where: { id: learnSkillId, userId: toUserId, type: "TEACH" },
+    where: { id: normalizedLearnSkillId, userId: toUserId, type: "TEACH" },
   });
 
   if (!learnSkill) throw new ValidationError("Target skill not found");
@@ -73,7 +82,7 @@ export const createSwapRequestService = async (
     where: {
       fromUserId,
       toUserId,
-      learnSkillId: parseInt(learnSkillId),
+      learnSkillId: normalizedLearnSkillId,
       status: "PENDING",
     },
   });
@@ -86,8 +95,8 @@ export const createSwapRequestService = async (
     data: {
       fromUserId,
       toUserId,
-      teachSkillId: teachSkillId ? parseInt(teachSkillId) : null,
-      learnSkillId: parseInt(learnSkillId),
+      teachSkillId: normalizedTeachSkillId,
+      learnSkillId: normalizedLearnSkillId,
       message: message || null,
     },
   });

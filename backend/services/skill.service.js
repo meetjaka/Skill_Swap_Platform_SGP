@@ -1,4 +1,5 @@
 import db from "../db/client.js";
+import { models } from "../db/models.js";
 const prisma = db;
 import {
   ValidationError,
@@ -14,6 +15,50 @@ const isMissingDisplayOrderColumnError = (error) => {
     column.toLowerCase().includes("displayorder") ||
     message.includes("displayorder");
   return (code === "P2022" && mentionsDisplayOrder) || mentionsDisplayOrder;
+};
+
+export const attachSkills = async (userSkills) => {
+  if (!userSkills.length) return userSkills;
+
+  const skillIds = [
+    ...new Set(
+      userSkills
+        .map((userSkill) => userSkill.skillId)
+        .filter((skillId) => skillId !== undefined && skillId !== null),
+    ),
+  ];
+  if (!skillIds.length) return userSkills;
+
+  // UserSkill.skillId and Skill.id are legacy numeric fields, not Mongo refs,
+  // so the compatibility layer cannot resolve them with populate().
+  const legacyIds = [
+    ...new Set(
+      skillIds.flatMap((skillId) => {
+        const numericId = Number(skillId);
+        return Number.isNaN(numericId) ? [skillId] : [skillId, numericId];
+      }),
+    ),
+  ];
+  const mongoIds = skillIds.filter((skillId) =>
+    /^[a-f\d]{24}$/i.test(String(skillId)),
+  );
+  const conditions = [{ id: { $in: legacyIds } }];
+  if (mongoIds.length) conditions.push({ _id: { $in: mongoIds } });
+
+  const skills = await models.Skill.find({ $or: conditions }).lean().exec();
+  const skillsById = new Map();
+  for (const skill of skills) {
+    if (skill.id !== undefined && skill.id !== null) {
+      skillsById.set(String(skill.id), skill);
+    }
+    if (skill._id) skillsById.set(String(skill._id), skill);
+  }
+
+  return userSkills.map((userSkill) => ({
+    ...userSkill,
+    id: userSkill.id ?? String(userSkill._id),
+    skill: skillsById.get(String(userSkill.skillId)) || null,
+  }));
 };
 
 export const getAllSkillsService = async ({
@@ -77,7 +122,7 @@ export const getUsersWithSkillService = async (
   ]);
 
   return {
-    data: userSkills,
+    data: await attachSkills(userSkills),
     meta: {
       total,
       page: Math.floor(skip / take) + 1,
@@ -110,22 +155,24 @@ export const createSkillService = async (data) => {
 
 export const getUserSkillsService = async (userId) => {
   try {
-    return await prisma.userSkill.findMany({
+    const userSkills = await prisma.userSkill.findMany({
       where: { userId },
       orderBy: [{ displayOrder: "asc" }, { createdAt: "asc" }],
       include: { skill: true, preview: true },
     });
+    return attachSkills(userSkills);
   } catch (error) {
     if (!isMissingDisplayOrderColumnError(error)) {
       throw error;
     }
 
     // Fallback for environments where the latest migration is not applied yet.
-    return prisma.userSkill.findMany({
+    const userSkills = await prisma.userSkill.findMany({
       where: { userId },
       orderBy: { createdAt: "asc" },
       include: { skill: true, preview: true },
     });
+    return attachSkills(userSkills);
   }
 };
 

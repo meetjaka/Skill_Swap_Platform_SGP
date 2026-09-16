@@ -47,9 +47,21 @@ const paginationSchema = z
 
 const swapRequestSchema = z.object({
   toUserId: z.preprocess(toInt, z.number().int().positive()),
-  learnSkillId: z.preprocess(toInt, z.number().int().positive()),
+  learnSkillId: z.preprocess(
+    toInt,
+    z.union([
+      z.number().int().positive(),
+      z.string().regex(/^[a-f\d]{24}$/i, "Invalid skill id"),
+    ]),
+  ),
   teachSkillId: z
-    .preprocess(toInt, z.number().int().positive())
+    .preprocess(
+      toInt,
+      z.union([
+        z.number().int().positive(),
+        z.string().regex(/^[a-f\d]{24}$/i, "Invalid skill id"),
+      ]),
+    )
     .optional()
     .nullable(),
   message: z.string().max(1000).optional().nullable(),

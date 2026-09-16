@@ -206,21 +206,29 @@ const delegate = (name) => {
       Model.findOneAndDelete(getUniqueWhere(args.where)).exec(),
     deleteMany: async (args = {}) =>
       Model.deleteMany(translateWhere(args.where)),
-    upsert: async (args = {}) =>
-      run(
+    upsert: async (args = {}) => {
+      const update = normalizeUpdateData(args.update);
+      const create = await normalizeCreateData(Model.modelName, args.create);
+      const updateFields = new Set([
+        ...Object.keys(update.$set || {}),
+        ...Object.keys(update.$inc || {}),
+      ]);
+      const insertOnly = Object.fromEntries(
+        Object.entries(create).filter(([key]) => !updateFields.has(key)),
+      );
+
+      return run(
         Model.findOneAndUpdate(
           getUniqueWhere(args.where),
           {
-            ...normalizeUpdateData(args.update),
-            $setOnInsert: await normalizeCreateData(
-              Model.modelName,
-              args.create,
-            ),
+            ...update,
+            $setOnInsert: insertOnly,
           },
           { upsert: true, new: true },
         ),
         args,
-      ).exec(),
+      ).exec();
+    },
     aggregate: async (args = {}) => {
       const rows = await Model.find(translateWhere(args.where)).lean().exec();
       const result = {};

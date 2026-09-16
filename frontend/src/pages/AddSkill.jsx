@@ -47,6 +47,12 @@ const AddSkill = () => {
 
   const selectedType = watch("type");
 
+  const normalizeOptionalUrl = (value) => {
+    const trimmed = String(value || "").trim();
+    if (!trimmed) return undefined;
+    return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  };
+
   const onSubmit = async (data) => {
     setIsLoading(true);
     try {
@@ -99,7 +105,7 @@ const AddSkill = () => {
         skillId: skillId,
         type: data.type,
         level: data.level,
-        proofUrl: data.proofUrl,
+        proofUrl: normalizeOptionalUrl(data.proofUrl),
         preview:
           data.type === "TEACH"
             ? {
@@ -114,7 +120,7 @@ const AddSkill = () => {
       navigate("/skills");
     } catch (error) {
       console.error(error);
-      toast.error("Failed to add skill.");
+      toast.error(error.response?.data?.message || "Failed to add skill.");
     } finally {
       setIsLoading(false);
     }

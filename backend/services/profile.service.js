@@ -9,6 +9,7 @@ const prisma = db;
 import sanitizeHtml from "sanitize-html";
 import { conf } from "../conf/conf.js";
 import { areUsersBlocked } from "./block.service.js";
+import { attachSkills } from "./skill.service.js";
 
 // Allow safe HTML in bio (from TinyMCE) but strip dangerous tags/attributes
 const sanitizeBio = (html) =>
@@ -177,10 +178,13 @@ const normalizeTimeZoneOrThrow = (value, fieldPath) => {
 
 const buildProfileCompletion = ({
   profile,
-  teachSkills,
-  learnSkills,
-  availability,
+  teachSkills = [],
+  learnSkills = [],
+  availability = [],
 }) => {
+  const safeTeachSkills = Array.isArray(teachSkills) ? teachSkills : [];
+  const safeLearnSkills = Array.isArray(learnSkills) ? learnSkills : [];
+  const safeAvailability = Array.isArray(availability) ? availability : [];
   const socialLinks = [
     profile?.githubLink,
     profile?.linkedinLink,
@@ -195,9 +199,9 @@ const buildProfileCompletion = ({
         .replace(/<[^>]*>/g, "")
         .trim(),
     ),
-    teachSkills.length > 0,
-    learnSkills.length > 0,
-    availability.length > 0,
+    safeTeachSkills.length > 0,
+    safeLearnSkills.length > 0,
+    safeAvailability.length > 0,
     socialLinks.some((link) => Boolean(String(link || "").trim())),
   ];
 
@@ -215,9 +219,10 @@ const buildProfileCompletion = ({
 };
 
 const buildAvailabilityPreview = (availability = []) => {
+  const safeAvailability = Array.isArray(availability) ? availability : [];
   const dayMap = new Map(VALID_WEEK_DAYS.map((day) => [day, []]));
 
-  availability.forEach((slot) => {
+  safeAvailability.forEach((slot) => {
     if (!dayMap.has(slot.dayOfWeek)) return;
     dayMap.get(slot.dayOfWeek).push({
       startTime: slot.startTime,
@@ -338,8 +343,18 @@ export const getMyProfileService = async (userId) => {
     throw new NotFound("User not found");
   }
 
-  const teachSkills = user.userSkills.filter((skill) => skill.type === "TEACH");
-  const learnSkills = user.userSkills.filter((skill) => skill.type === "LEARN");
+  const userSkills = await attachSkills(
+    await prisma.userSkill.findMany({
+      where: { userId },
+      orderBy: { createdAt: "asc" },
+      include: { preview: true },
+    }),
+  );
+  const availability = Array.isArray(user.availability)
+    ? user.availability
+    : [];
+  const teachSkills = userSkills.filter((skill) => skill.type === "TEACH");
+  const learnSkills = userSkills.filter((skill) => skill.type === "LEARN");
 
   const [
     reviewsAggregate,
@@ -512,7 +527,7 @@ export const getMyProfileService = async (userId) => {
     profile: user.profile,
     teachSkills,
     learnSkills,
-    availability: user.availability,
+    availability,
   });
 
   const socialLinks = {
@@ -549,7 +564,7 @@ export const getMyProfileService = async (userId) => {
       url: toValidUrl(link.url),
     }));
 
-  const availabilityPreview = buildAvailabilityPreview(user.availability);
+  const availabilityPreview = buildAvailabilityPreview(availability);
 
   const skillCredibility = teachSkills.map((skill) => ({
     id: skill.id,
@@ -855,8 +870,18 @@ export const getPublicProfileService = async (userId, viewerId = null) => {
       .catch(() => {});
   }
 
-  const teachSkills = user.userSkills.filter((skill) => skill.type === "TEACH");
-  const learnSkills = user.userSkills.filter((skill) => skill.type === "LEARN");
+  const userSkills = await attachSkills(
+    await prisma.userSkill.findMany({
+      where: { userId: { in: [userId, String(userId)] } },
+      orderBy: { createdAt: "asc" },
+      include: { preview: true },
+    }),
+  );
+  const availability = Array.isArray(user.availability)
+    ? user.availability
+    : [];
+  const teachSkills = userSkills.filter((skill) => skill.type === "TEACH");
+  const learnSkills = userSkills.filter((skill) => skill.type === "LEARN");
   const isOwner = Number.isInteger(viewerId) && viewerId === user.userId;
   const privacy = hasProfileEnhancementModels
     ? normalizePrivacy(user.profilePrivacy || createDefaultPrivacy())
@@ -1100,7 +1125,7 @@ export const getPublicProfileService = async (userId, viewerId = null) => {
     profile: user.profile,
     teachSkills,
     learnSkills,
-    availability: user.availability,
+    availability,
   });
 
   const resolvedTeachingStyles = parseTeachingStyles(
@@ -1123,11 +1148,11 @@ export const getPublicProfileService = async (userId, viewerId = null) => {
       teachingStyle: user.profile?.teachingStyle || null,
       teachingStyles: resolvedTeachingStyles,
     },
-    availability: canShowAvailability ? user.availability : [],
+    availability: canShowAvailability ? availability : [],
     availabilityPreview: canShowAvailability
-      ? buildAvailabilityPreview(user.availability)
+      ? buildAvailabilityPreview(availability)
       : buildAvailabilityPreview([]),
-    userSkills: user.userSkills,
+    userSkills,
     skillCredibility,
     learningGoals: learningGoalItems,
     skillProgress,
@@ -1346,19 +1371,20 @@ export const getFeaturedProfilesService = async ({
   );
 
   return users.map((u) => {
-    const teachSkills = u.userSkills
+    const userSkills = Array.isArray(u.userSkills) ? u.userSkills : [];
+    const teachSkills = userSkills
       .filter((s) => s.type === "TEACH")
       .map((s) => s.skill?.name)
       .filter(Boolean);
 
-    const learnSkills = u.userSkills
+    const learnSkills = userSkills
       .filter((s) => s.type === "LEARN")
       .map((s) => s.skill?.name)
       .filter(Boolean);
 
     const categories = [
       ...new Set(
-        u.userSkills
+        userSkills
           .filter((s) => s.type === "TEACH")
           .map((s) => s.skill?.category)
           .filter(Boolean),
