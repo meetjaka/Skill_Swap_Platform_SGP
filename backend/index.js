@@ -77,25 +77,30 @@ const isUserInClass = async (userId, classId) => {
   if (!classId) return false;
   const swapClass = await db.swapClass.findUnique({
     where: { id: classId },
-    include: { swapRequest: { select: { fromUserId: true, toUserId: true } } },
   });
   if (!swapClass) return false;
-  return (
-    swapClass.swapRequest.fromUserId === userId ||
-    swapClass.swapRequest.toUserId === userId
+  const swapRequest = await db.swapRequest.findUnique({
+    where: { id: swapClass.swapRequestId },
+  });
+  if (!swapRequest) return false;
+  return [swapRequest.fromUserId, swapRequest.toUserId].some(
+    (memberId) => String(memberId) === String(userId),
   );
 };
 
 const getPartnerIdInClass = async (userId, classId) => {
   const swapClass = await db.swapClass.findUnique({
     where: { id: classId },
-    include: { swapRequest: { select: { fromUserId: true, toUserId: true } } },
   });
   if (!swapClass) return null;
-  if (swapClass.swapRequest.fromUserId === userId)
-    return swapClass.swapRequest.toUserId;
-  if (swapClass.swapRequest.toUserId === userId)
-    return swapClass.swapRequest.fromUserId;
+  const swapRequest = await db.swapRequest.findUnique({
+    where: { id: swapClass.swapRequestId },
+  });
+  if (!swapRequest) return null;
+  if (String(swapRequest.fromUserId) === String(userId))
+    return swapRequest.toUserId;
+  if (String(swapRequest.toUserId) === String(userId))
+    return swapRequest.fromUserId;
   return null;
 };
 
@@ -239,7 +244,7 @@ const emitChatPresence = async (classId, ioInstance) => {
   const userIds = await getRoomUserIds(room, ioInstance);
   ioInstance
     .to(room)
-    .emit("chat_presence", { classId: Number(classId), userIds });
+    .emit("chat_presence", { classId: String(classId), userIds });
 };
 
 const emitCallPresence = async (classId, ioInstance) => {
@@ -247,7 +252,7 @@ const emitCallPresence = async (classId, ioInstance) => {
   const userIds = await getRoomUserIds(room, ioInstance);
   ioInstance
     .to(room)
-    .emit("classroom_call_presence", { classId: Number(classId), userIds });
+    .emit("classroom_call_presence", { classId: String(classId), userIds });
 };
 
 // Store io instance in app so controllers can access it
@@ -269,7 +274,7 @@ io.on("connection", (socket) => {
   socket.on("join_chat", async (classId) => {
     try {
       const userId = socket.user?.userId;
-      const normalizedClassId = Number(classId);
+      const normalizedClassId = String(classId);
       const allowed = await isUserInClass(userId, normalizedClassId);
       if (!allowed) {
         logger.warn("Unauthorized join_chat attempt", {
@@ -336,8 +341,8 @@ io.on("connection", (socket) => {
   socket.on("whiteboard_scene_request", async ({ classId }) => {
     try {
       const userId = socket.user?.userId;
-      const normalizedClassId = Number(classId);
-      if (!Number.isInteger(normalizedClassId)) return;
+      const normalizedClassId = String(classId);
+      if (!normalizedClassId) return;
 
       const allowed = await isUserInClass(userId, normalizedClassId);
       if (!allowed) return;
@@ -363,7 +368,7 @@ io.on("connection", (socket) => {
   socket.on("classroom_call_join", async (classId) => {
     try {
       const userId = socket.user?.userId;
-      const normalizedClassId = Number(classId);
+      const normalizedClassId = String(classId);
       const allowed = await isUserInClass(userId, normalizedClassId);
       if (!allowed) {
         return socket.emit("error", "Not authorized for this class");
@@ -409,13 +414,9 @@ io.on("connection", (socket) => {
   socket.on("classroom_call_offer", async ({ classId, toUserId, sdp }) => {
     try {
       const fromUserId = socket.user?.userId;
-      const normalizedClassId = Number(classId);
+      const normalizedClassId = String(classId);
       const normalizedToUserId = Number(toUserId);
-      if (
-        !Number.isInteger(normalizedClassId) ||
-        !Number.isInteger(normalizedToUserId) ||
-        !sdp
-      )
+      if (!normalizedClassId || !Number.isInteger(normalizedToUserId) || !sdp)
         return;
 
       const allowed = await isUserInClass(fromUserId, normalizedClassId);
@@ -438,13 +439,9 @@ io.on("connection", (socket) => {
   socket.on("classroom_call_answer", async ({ classId, toUserId, sdp }) => {
     try {
       const fromUserId = socket.user?.userId;
-      const normalizedClassId = Number(classId);
+      const normalizedClassId = String(classId);
       const normalizedToUserId = Number(toUserId);
-      if (
-        !Number.isInteger(normalizedClassId) ||
-        !Number.isInteger(normalizedToUserId) ||
-        !sdp
-      )
+      if (!normalizedClassId || !Number.isInteger(normalizedToUserId) || !sdp)
         return;
 
       const allowed = await isUserInClass(fromUserId, normalizedClassId);
@@ -522,9 +519,9 @@ io.on("connection", (socket) => {
   const relayTypingStart = async (classId) => {
     try {
       const userId = socket.user?.userId;
-      const allowed = await isUserInClass(userId, Number(classId));
+      const allowed = await isUserInClass(userId, String(classId));
       if (!allowed) return;
-      const partnerId = await getPartnerIdInClass(userId, Number(classId));
+      const partnerId = await getPartnerIdInClass(userId, String(classId));
       if (partnerId && (await areUsersBlocked(userId, partnerId))) return;
       socket.to(`chat_${classId}`).emit("user_typing", { userId, classId });
       socket.to(`chat_${classId}`).emit("typing", { userId, classId });
@@ -534,9 +531,9 @@ io.on("connection", (socket) => {
   const relayTypingStop = async (classId) => {
     try {
       const userId = socket.user?.userId;
-      const allowed = await isUserInClass(userId, Number(classId));
+      const allowed = await isUserInClass(userId, String(classId));
       if (!allowed) return;
-      const partnerId = await getPartnerIdInClass(userId, Number(classId));
+      const partnerId = await getPartnerIdInClass(userId, String(classId));
       if (partnerId && (await areUsersBlocked(userId, partnerId))) return;
       socket
         .to(`chat_${classId}`)
@@ -594,7 +591,7 @@ io.on("connection", (socket) => {
   socket.on("whiteboard_scene_update", async ({ classId, scene }) => {
     try {
       const userId = socket.user?.userId;
-      const normalizedClassId = Number(classId);
+      const normalizedClassId = String(classId);
       if (!Number.isInteger(normalizedClassId) || !scene) return;
 
       const allowed = await isUserInClass(userId, normalizedClassId);
@@ -631,7 +628,7 @@ io.on("connection", (socket) => {
   socket.on("mark_read", async (classId) => {
     try {
       const userId = socket.user?.userId;
-      const normalizedClassId = Number(classId);
+      const normalizedClassId = String(classId);
       const allowed = await isUserInClass(userId, normalizedClassId);
       if (!allowed) return;
       const partnerId = await getPartnerIdInClass(userId, normalizedClassId);

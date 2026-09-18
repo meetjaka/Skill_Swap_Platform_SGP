@@ -9,17 +9,20 @@ import { NotFound, ForbiddenError } from "../errors/generic.errors.js";
 export const assertUserInClass = async (userId, classId) => {
   const swapClass = await prisma.swapClass.findUnique({
     where: { id: classId },
-    include: {
-      swapRequest: { select: { fromUserId: true, toUserId: true } },
-    },
   });
 
   if (!swapClass) throw new NotFound("Class not found");
 
-  const isMember =
-    swapClass.swapRequest.fromUserId === userId ||
-    swapClass.swapRequest.toUserId === userId;
+  const swapRequest = await prisma.swapRequest.findUnique({
+    where: { id: swapClass.swapRequestId },
+  });
+  if (!swapRequest) throw new NotFound("Swap request not found");
+
+  const isMember = [swapRequest.fromUserId, swapRequest.toUserId].some(
+    (memberId) => String(memberId) === String(userId),
+  );
   if (!isMember) throw new ForbiddenError("Not authorized");
 
-  return swapClass;
+  const classData = swapClass.toObject ? swapClass.toObject() : swapClass;
+  return { ...classData, swapRequest };
 };

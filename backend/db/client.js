@@ -25,6 +25,20 @@ const toMongoValue = (value) =>
     ? { $in: value.$in.map(toMongoValue) }
     : value;
 
+const isMongoObjectId = (value) =>
+  typeof value === "string" && /^[a-f\d]{24}$/i.test(value);
+
+const usesMongoObjectId = (value) => {
+  if (isMongoObjectId(value)) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+
+  return Object.values(value).some((operand) =>
+    Array.isArray(operand)
+      ? operand.some(isMongoObjectId)
+      : isMongoObjectId(operand),
+  );
+};
+
 const translateWhere = (where = {}) => {
   if (!where || typeof where !== "object") return {};
   const result = {};
@@ -57,8 +71,10 @@ const translateWhere = (where = {}) => {
         else if (map[operator]) next[map[operator]] = toMongoValue(operand);
         else next[operator] = translateWhere(operand);
       }
-      result[key] = next;
-    } else result[key === "id" ? "_id" : key] = toMongoValue(value);
+      result[key === "id" && usesMongoObjectId(value) ? "_id" : key] = next;
+    } else
+      result[key === "id" && usesMongoObjectId(value) ? "_id" : key] =
+        toMongoValue(value);
   }
   return result;
 };

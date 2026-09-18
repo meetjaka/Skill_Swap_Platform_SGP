@@ -10,8 +10,12 @@ import { conf } from "../conf/conf.js";
 import { createNotificationForUserService } from "../services/notification.service.js";
 
 const normalizeClassId = (value) => {
-  const classId = Number.parseInt(value, 10);
-  if (!Number.isInteger(classId)) {
+  const rawId = String(value || "").trim();
+  const classId = /^\d+$/.test(rawId) ? Number(rawId) : rawId;
+  if (
+    (!Number.isInteger(classId) || classId <= 0) &&
+    !/^[a-f\d]{24}$/i.test(classId)
+  ) {
     throw new ValidationError("Invalid class id", "INVALID_CLASS_ID");
   }
   return classId;
@@ -131,15 +135,17 @@ export const sendMessage = async (req, res, next) => {
     // Push a notification to the other participant
     const swapClass = await db.swapClass.findUnique({
       where: { id: classId },
-      include: {
-        swapRequest: { select: { fromUserId: true, toUserId: true } },
-      },
     });
-    if (swapClass) {
+    const swapRequest = swapClass?.swapRequestId
+      ? await db.swapRequest.findUnique({
+          where: { id: swapClass.swapRequestId },
+        })
+      : null;
+    if (swapRequest) {
       const otherUserId =
-        swapClass.swapRequest.fromUserId === userId
-          ? swapClass.swapRequest.toUserId
-          : swapClass.swapRequest.fromUserId;
+        String(swapRequest.fromUserId) === String(userId)
+          ? swapRequest.toUserId
+          : swapRequest.fromUserId;
       // Lightweight push — no DB notification for every chat msg, just socket event
       if (io) {
         io.to(`user_${otherUserId}`).emit("new_chat_message", {
@@ -218,16 +224,18 @@ export const sendAttachmentMessage = async (req, res, next) => {
 
     const swapClass = await db.swapClass.findUnique({
       where: { id: classId },
-      include: {
-        swapRequest: { select: { fromUserId: true, toUserId: true } },
-      },
     });
 
-    if (swapClass) {
+    const swapRequest = swapClass?.swapRequestId
+      ? await db.swapRequest.findUnique({
+          where: { id: swapClass.swapRequestId },
+        })
+      : null;
+    if (swapRequest) {
       const otherUserId =
-        swapClass.swapRequest.fromUserId === userId
-          ? swapClass.swapRequest.toUserId
-          : swapClass.swapRequest.fromUserId;
+        String(swapRequest.fromUserId) === String(userId)
+          ? swapRequest.toUserId
+          : swapRequest.fromUserId;
 
       if (io) {
         io.to(`user_${otherUserId}`).emit("new_chat_message", {

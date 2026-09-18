@@ -133,7 +133,7 @@ export const searchMessagesService = async (
 export const sendMessageService = async (classId, userId, data) => {
   const swapClass = await assertUserInClass(userId, classId);
   const partnerId =
-    swapClass.swapRequest.fromUserId === userId
+    String(swapClass.swapRequest.fromUserId) === String(userId)
       ? swapClass.swapRequest.toUserId
       : swapClass.swapRequest.fromUserId;
   await assertUsersNotBlocked(userId, partnerId);

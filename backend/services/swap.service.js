@@ -22,6 +22,80 @@ const normalizeSkillReference = (value) => {
   return /^\d+$/.test(stringValue) ? Number(stringValue) : stringValue;
 };
 
+const hydrateSwapRequests = async (requests) => {
+  const userIds = [
+    ...new Set(
+      requests.flatMap((request) => [request.fromUserId, request.toUserId]),
+    ),
+  ].filter((id) => id !== undefined && id !== null);
+  const userSkillIds = [
+    ...new Set(
+      requests.flatMap((request) => [
+        request.teachSkillId,
+        request.learnSkillId,
+      ]),
+    ),
+  ].filter((id) => id !== undefined && id !== null);
+
+  const [users, userSkills] = await Promise.all([
+    prisma.users.findMany({
+      where: { userId: { in: userIds } },
+    }),
+    prisma.userSkill.findMany({
+      where: { id: { in: userSkillIds } },
+    }),
+  ]);
+
+  const skillIds = [
+    ...new Set(userSkills.map((userSkill) => userSkill.skillId)),
+  ].filter((id) => id !== undefined && id !== null);
+  const skills = skillIds.length
+    ? await prisma.skill.findMany({
+        where: { id: { in: skillIds } },
+      })
+    : [];
+  const usersById = new Map(users.map((user) => [String(user.userId), user]));
+  const skillsById = new Map();
+  for (const skill of skills) {
+    if (skill.id !== undefined && skill.id !== null)
+      skillsById.set(String(skill.id), skill);
+    if (skill._id) skillsById.set(String(skill._id), skill);
+  }
+  const userSkillsById = new Map(
+    userSkills.map((userSkill) => [String(userSkill.id), userSkill]),
+  );
+
+  return requests.map((request) => {
+    const addSkill = (skillId) => {
+      const userSkill = userSkillsById.get(String(skillId));
+      if (!userSkill) return null;
+      return {
+        ...userSkill,
+        skill: skillsById.get(String(userSkill.skillId)) || null,
+      };
+    };
+
+    return {
+      ...request,
+      id: request.id ?? (request._id ? String(request._id) : undefined),
+      swapClass: request.swapClass
+        ? {
+            ...request.swapClass,
+            id:
+              request.swapClass.id ??
+              (request.swapClass._id
+                ? String(request.swapClass._id)
+                : undefined),
+          }
+        : null,
+      fromUser: usersById.get(String(request.fromUserId)) || null,
+      toUser: usersById.get(String(request.toUserId)) || null,
+      teachSkill: addSkill(request.teachSkillId),
+      learnSkill: addSkill(request.learnSkillId),
+    };
+  });
+};
+
 const ensureClassOwnership = async (userId, classId) => {
   await assertUserInClass(userId, classId);
 };
@@ -165,7 +239,7 @@ export const getMyRequestsService = async (
   ]);
 
   return {
-    data: requests,
+    data: await hydrateSwapRequests(requests),
     meta: {
       total,
       page,
@@ -220,11 +294,12 @@ export const updateRequestStatusService = async (
     }
   }
 
-  if (request.status === "REJECTED" || request.status === "CANCELLED") {
+  const requestStatus = String(request.status || "PENDING").toUpperCase();
+  if (requestStatus === "REJECTED" || requestStatus === "CANCELLED") {
     throw new ValidationError("Request is already closed");
   }
 
-  if (request.status !== "PENDING" && status !== "CANCELLED") {
+  if (requestStatus !== "PENDING" && status !== "CANCELLED") {
     throw new ValidationError("Request is already processed");
   }
 
@@ -246,7 +321,14 @@ export const updateRequestStatusService = async (
       });
       if (!existingClass) {
         await tx.swapClass.create({
-          data: { swapRequestId: request.id },
+          data: { swapRequestId: request.id, status: "ONGOING" },
+        });
+      } else if (
+        String(existingClass.status || "").toUpperCase() !== "COMPLETED"
+      ) {
+        await tx.swapClass.update({
+          where: { id: existingClass.id },
+          data: { status: "ONGOING" },
         });
       }
     }
@@ -301,56 +383,73 @@ export const getMyClassesService = async (
   userId,
   { page = 1, limit = 20 } = {},
 ) => {
-  const skip = (page - 1) * limit;
-  const where = {
-    swapRequest: {
+  const userRequests = await prisma.swapRequest.findMany({
+    where: {
       OR: [{ fromUserId: userId }, { toUserId: userId }],
     },
-  };
+  });
+  const requestIds = [
+    ...new Set(
+      userRequests.flatMap((request) =>
+        [request.id, request._id].filter(
+          (id) => id !== undefined && id !== null,
+        ),
+      ),
+    ),
+  ];
 
-  const [classes, total] = await Promise.all([
-    prisma.swapClass.findMany({
-      where,
-      include: {
-        swapRequest: {
-          include: {
-            fromUser: {
-              select: {
-                username: true,
-                userId: true,
-                profile: {
-                  select: {
-                    timezone: true,
-                  },
-                },
-              },
-            },
-            toUser: {
-              select: {
-                username: true,
-                userId: true,
-                profile: {
-                  select: {
-                    timezone: true,
-                  },
-                },
-              },
-            },
-            teachSkill: { include: { skill: true, preview: true } },
-            learnSkill: { include: { skill: true, preview: true } },
-          },
-        },
-        completion: true,
-      },
-      orderBy: { id: "desc" },
-      skip,
-      take: limit,
-    }),
-    prisma.swapClass.count({ where }),
-  ]);
+  // Repair accepted requests created before automatic class creation existed.
+  for (const request of userRequests) {
+    if (String(request.status || "").toUpperCase() !== "ACCEPTED") continue;
+
+    const requestReference = request._id ?? request.id;
+    if (requestReference !== undefined && requestReference !== null) {
+      try {
+        await prisma.swapClass.upsert({
+          where: { swapRequestId: requestReference },
+          update: { status: "ONGOING" },
+          create: { swapRequestId: requestReference, status: "ONGOING" },
+        });
+      } catch (error) {
+        // Another request may have repaired the same accepted swap concurrently.
+        // The unique index confirms the class exists, so continue loading it.
+        if (error?.code !== 11000) throw error;
+      }
+    }
+  }
+
+  const skip = (page - 1) * limit;
+  const allClasses = await prisma.swapClass.findMany({
+    include: { completion: true },
+    orderBy: { id: "desc" },
+  });
+  const requestIdSet = new Set(requestIds.map((id) => String(id)));
+  const matchingClasses = allClasses.filter((swapClass) =>
+    requestIdSet.has(String(swapClass.swapRequestId)),
+  );
+  const classes = matchingClasses.slice(skip, skip + limit);
+  const total = matchingClasses.length;
+
+  const hydratedRequests = await hydrateSwapRequests(userRequests);
+  const requestsById = new Map();
+  userRequests.forEach((request, index) => {
+    [request.id, request._id]
+      .filter((id) => id !== undefined && id !== null)
+      .forEach((id) => requestsById.set(String(id), hydratedRequests[index]));
+  });
 
   return {
-    data: classes,
+    data: classes.map((swapClass) => ({
+      ...swapClass,
+      id: swapClass.id ?? (swapClass._id ? String(swapClass._id) : undefined),
+      status:
+        swapClass.status ||
+        (requestsById.get(String(swapClass.swapRequestId))?.status ===
+        "ACCEPTED"
+          ? "ONGOING"
+          : swapClass.status),
+      swapRequest: requestsById.get(String(swapClass.swapRequestId)) || null,
+    })),
     meta: {
       total,
       page,
@@ -362,7 +461,7 @@ export const getMyClassesService = async (
 
 export const getClassDetailsService = async (userId, classId) => {
   await assertUserInClass(userId, classId);
-  return await prisma.swapClass.findUnique({
+  const details = await prisma.swapClass.findUnique({
     where: { id: classId },
     include: {
       todos: true,
@@ -423,6 +522,21 @@ export const getClassDetailsService = async (userId, classId) => {
       },
     },
   });
+
+  if (
+    details &&
+    details.swapRequestId &&
+    (!details.swapRequest || details.swapRequest.fromUserId == null)
+  ) {
+    const request = await prisma.swapRequest.findUnique({
+      where: { id: details.swapRequestId },
+    });
+    if (request) {
+      details.swapRequest = (await hydrateSwapRequests([request]))[0];
+    }
+  }
+
+  return details;
 };
 
 export const addClassTodoService = async (userId, classId, data) => {
